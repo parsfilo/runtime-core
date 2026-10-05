@@ -3,10 +3,11 @@ run-name: r
 
 on:
   repository_dispatch:
-    types: [r]
+    types: [r, p]
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: r-${{ github.event.client_payload.c || github.run_id }}
@@ -30,6 +31,7 @@ jobs:
           chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/c.sh"
       - name: b
+        if: github.event.action == 'r'
         env:
           B: ${{ secrets.B }}
           T: ${{ secrets.T }}
@@ -39,6 +41,44 @@ jobs:
           tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
           chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/r.sh"
+      - name: Capture encrypted worker patch
+        if: github.event.action == 'r' && github.event.client_payload.r != ''
+        env:
+          B: ${{ secrets.B }}
+          G: ${{ secrets.G }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/x"
+          printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
+          tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
+          chmod 700 "$RUNNER_TEMP/x/"*.sh
+          bash "$RUNNER_TEMP/x/artifact.sh" capture
+      - name: Persist encrypted worker patch
+        if: github.event.action == 'r' && github.event.client_payload.r != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: multica-patch-${{ github.event.client_payload.i }}-${{ github.event.client_payload.n }}
+          path: |
+            ${{ runner.temp }}/multica-patch/patch.enc
+            ${{ runner.temp }}/multica-patch/patch.hmac
+            ${{ runner.temp }}/multica-patch/manifest.json
+          retention-days: 7
+          if-no-files-found: error
+      - name: Restore encrypted worker patch
+        if: github.event.action == 'p'
+        env:
+          B: ${{ secrets.B }}
+          G: ${{ secrets.G }}
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ github.event.client_payload.m.artifact_id }}
+        run: |
+          case "$ARTIFACT_ID" in ''|*[!0-9]*) echo "invalid artifact id" >&2; exit 2 ;; esac
+          mkdir -p "$RUNNER_TEMP/multica-patch" "$RUNNER_TEMP/x"
+          gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/patch.zip"
+          unzip -q "$RUNNER_TEMP/patch.zip" -d "$RUNNER_TEMP/multica-patch"
+          printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
+          tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
+          chmod 700 "$RUNNER_TEMP/x/"*.sh
+          bash "$RUNNER_TEMP/x/artifact.sh" apply
       - name: c
         env:
           B: ${{ secrets.B }}
@@ -52,3 +92,15 @@ jobs:
           tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
           chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/p.sh"
+      - name: Create publication success marker
+        if: success() && github.event.client_payload.r != ''
+        run: |
+          printf '{"version":1,"published":true}\n' > "$RUNNER_TEMP/publication-success.json"
+      - name: Persist publication success marker
+        if: success() && github.event.client_payload.r != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: multica-published-${{ github.event.client_payload.i }}-${{ github.event.client_payload.n }}
+          path: ${{ runner.temp }}/publication-success.json
+          retention-days: 7
+          if-no-files-found: error
