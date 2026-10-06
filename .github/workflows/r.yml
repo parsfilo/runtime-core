@@ -14,12 +14,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  r:
+  worker:
+    if: github.event.action == 'r'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: ${{ github.event.client_payload.e }}
     steps:
-      - name: a
+      - name: Checkout target
         env:
           B: ${{ secrets.B }}
           G: ${{ secrets.G }}
@@ -30,8 +31,8 @@ jobs:
           tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
           chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/c.sh"
-      - name: b
-        if: github.event.action == 'r'
+
+      - name: Run worker
         env:
           B: ${{ secrets.B }}
           T: ${{ secrets.T }}
@@ -41,19 +42,21 @@ jobs:
           tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
           chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/r.sh"
+
       - name: Capture encrypted worker patch
-        if: github.event.action == 'r' && github.event.client_payload.r != ''
+        if: github.event.client_payload.r != ''
         env:
           B: ${{ secrets.B }}
-          G: ${{ secrets.G }}
+          K: ${{ secrets.K }}
         run: |
           mkdir -p "$RUNNER_TEMP/x"
           printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
           tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
           chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/artifact.sh" capture
+
       - name: Persist encrypted worker patch
-        if: github.event.action == 'r' && github.event.client_payload.r != ''
+        if: github.event.client_payload.r != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: multica-patch-${{ github.event.client_payload.i }}-${{ github.event.client_payload.n }}
@@ -63,23 +66,62 @@ jobs:
             ${{ runner.temp }}/multica-patch/manifest.json
           retention-days: 7
           if-no-files-found: error
+
+  publish:
+    needs: worker
+    if: always() && github.event.client_payload.r != '' && (github.event.action == 'p' || (github.event.action == 'r' && needs.worker.result == 'success'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: ${{ github.event.client_payload.e }}
+    steps:
       - name: Restore encrypted worker patch
-        if: github.event.action == 'p'
         env:
           B: ${{ secrets.B }}
-          G: ${{ secrets.G }}
           GH_TOKEN: ${{ github.token }}
           ARTIFACT_ID: ${{ github.event.client_payload.m.artifact_id }}
+          ISSUE_ID: ${{ github.event.client_payload.i }}
+          NATIVE_RUN_ID: ${{ github.event.client_payload.n }}
         run: |
+          set -euo pipefail
+          if [ "${{ github.event.action }}" = "r" ]; then
+            artifact_name="multica-patch-${ISSUE_ID}-${NATIVE_RUN_ID}"
+            ARTIFACT_ID="$(
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100"                 --jq ".artifacts[] | select(.name == \"$artifact_name\" and .expired == false) | .id"                 | head -n1
+            )"
+          fi
           case "$ARTIFACT_ID" in ''|*[!0-9]*) echo "invalid artifact id" >&2; exit 2 ;; esac
           mkdir -p "$RUNNER_TEMP/multica-patch" "$RUNNER_TEMP/x"
-          gh api "repos/${{ github.repository }}/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/patch.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/patch.zip"
           unzip -q "$RUNNER_TEMP/patch.zip" -d "$RUNNER_TEMP/multica-patch"
           printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
           tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
           chmod 700 "$RUNNER_TEMP/x/"*.sh
+
+      - name: Trusted checkout
+        env:
+          B: ${{ secrets.B }}
+          G: ${{ secrets.G }}
+          GH_TOKEN: ${{ secrets.G }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/x"
+          printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
+          tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
+          chmod 700 "$RUNNER_TEMP/x/"*.sh
+          bash "$RUNNER_TEMP/x/c.sh"
+
+      - name: Apply encrypted worker patch
+        env:
+          B: ${{ secrets.B }}
+          K: ${{ secrets.K }}
+          G: ${{ secrets.G }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/x"
+          printf '%s' "$B" | base64 -d > "$RUNNER_TEMP/b.tgz"
+          tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
+          chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/artifact.sh" apply
-      - name: c
+
+      - name: Publish
         env:
           B: ${{ secrets.B }}
           G: ${{ secrets.G }}
@@ -92,12 +134,14 @@ jobs:
           tar -xzf "$RUNNER_TEMP/b.tgz" -C "$RUNNER_TEMP/x"
           chmod 700 "$RUNNER_TEMP/x/"*.sh
           bash "$RUNNER_TEMP/x/p.sh"
+
       - name: Create publication success marker
-        if: success() && github.event.client_payload.r != ''
+        if: success()
         run: |
           printf '{"version":1,"published":true}\n' > "$RUNNER_TEMP/publication-success.json"
+
       - name: Persist publication success marker
-        if: success() && github.event.client_payload.r != ''
+        if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: multica-published-${{ github.event.client_payload.i }}-${{ github.event.client_payload.n }}
